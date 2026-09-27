@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { planApi } from './api';
 import { distanceBetween, routePoints, validateRoute } from './geometry';
+import { ensureUniqueZoneIds, newZoneId, removeZoneAt } from './zones';
 import type { NoFlyZone, Point, RoutePlan, ValidationResult } from './types';
 
 const CANVAS = { width: 100, height: 70 };
@@ -81,7 +82,7 @@ export default function App() {
     }
     const index = plan.noFlyZones.length;
     const zone: NoFlyZone = {
-      id: `zone-${Date.now()}`,
+      id: newZoneId(),
       name: `禁飞区 ${index + 1}`,
       kind: 'polygon',
       points: draftPolygon,
@@ -102,7 +103,7 @@ export default function App() {
     const y = Math.max(1, Math.min(CANVAS.height - height - 1, point.y - height / 2));
     const index = plan.noFlyZones.length;
     const zone: NoFlyZone = {
-      id: `zone-${Date.now()}`,
+      id: newZoneId(),
       name: `矩形禁飞区 ${index + 1}`,
       kind: 'rectangle',
       points: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }],
@@ -118,26 +119,30 @@ export default function App() {
   };
 
   const removeWaypoint = (index: number) => updatePlan({ waypoints: plan.waypoints.filter((_, waypointIndex) => waypointIndex !== index) });
-  const removeZone = (id: string) => updatePlan({ noFlyZones: plan.noFlyZones.filter((zone) => zone.id !== id) });
+  // 按位置删除：即使数据中残留重复 id，也只移除被点击的那一条区域
+  const removeZone = (index: number) => updatePlan({ noFlyZones: removeZoneAt(plan.noFlyZones, index) });
 
   const save = async () => {
     setSaveState('saving');
     try {
       const { plan: saved } = await planApi.save({ ...plan, id: activePlanId });
-      setActivePlanId(saved.id);
-      setPlan(saved);
-      setSavedPlans((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      const normalized = { ...saved, noFlyZones: ensureUniqueZoneIds(saved.noFlyZones) };
+      setActivePlanId(normalized.id);
+      setPlan(normalized);
+      setSavedPlans((current) => [normalized, ...current.filter((item) => item.id !== normalized.id)]);
       setSaveState('saved');
       setNotice('方案已保存到内存 API');
       window.setTimeout(() => setSaveState('idle'), 1800);
-    } catch {
+    } catch (error) {
       setSaveState('error');
-      setNotice('保存失败：请确认后端运行在 http://localhost:4000');
+      // 后端对重复禁飞区 id 返回 409 及具体原因，直接展示而不是笼统提示
+      setNotice(`保存失败：${error instanceof Error ? error.message : '请确认后端运行在 http://localhost:4000'}`);
     }
   };
 
   const loadPlan = (saved: RoutePlan) => {
-    setPlan(saved);
+    // 兜底改写残留重复 id，保证 key 唯一、删除与风险定位都指向确定对象
+    setPlan({ ...saved, noFlyZones: ensureUniqueZoneIds(saved.noFlyZones) });
     setActivePlanId(saved.id);
     setDraftPolygon([]);
     setNotice(`已加载「${saved.name}」`);
@@ -200,7 +205,7 @@ export default function App() {
           <section className="side-section">
             <div className="section-title"><span>禁飞区</span><strong>{plan.noFlyZones.length}</strong></div>
             {plan.noFlyZones.length === 0 && <div className="empty-row">暂无禁飞区</div>}
-            {plan.noFlyZones.map((zone) => <div className="zone-row" key={zone.id}><span className="zone-swatch" style={{ background: zone.color }} /><div><b>{zone.name}</b><small>{zone.kind === 'rectangle' ? '矩形区域' : `${zone.points.length} 边形区域`}</small></div><button className="remove-button" onClick={() => removeZone(zone.id)}>×</button></div>)}
+            {plan.noFlyZones.map((zone, index) => <div className="zone-row" key={`${zone.id}-${index}`}><span className="zone-swatch" style={{ background: zone.color }} /><div><b>{zone.name}</b><small>{zone.kind === 'rectangle' ? '矩形区域' : `${zone.points.length} 边形区域`}</small></div><button className="remove-button" onClick={() => removeZone(index)}>×</button></div>)}
           </section>
 
           <section className="side-section saved-section">
@@ -221,7 +226,7 @@ export default function App() {
               </defs>
               <rect width={CANVAS.width} height={CANVAS.height} fill="#f7fbfa" />
               <rect width={CANVAS.width} height={CANVAS.height} fill="url(#majorGrid)" />
-              {plan.noFlyZones.map((zone) => <polygon key={zone.id} points={zone.points.map((point) => `${point.x},${point.y}`).join(' ')} fill={zone.color} fillOpacity="0.19" stroke={zone.color} strokeWidth="0.7" strokeDasharray="1.5 1" />)}
+              {plan.noFlyZones.map((zone, index) => <polygon key={`${zone.id}-${index}`} points={zone.points.map((point) => `${point.x},${point.y}`).join(' ')} fill={zone.color} fillOpacity="0.19" stroke={zone.color} strokeWidth="0.7" strokeDasharray="1.5 1" />)}
               {draftPolygon.length > 0 && <><polyline points={draftPolygon.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke="#0f766e" strokeWidth="0.65" strokeDasharray="1.5 1" />{draftPolygon.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="1.15" fill="#0f766e" />)}</>}
               {points.slice(1).map((point, index) => <line key={index} x1={points[index].x} y1={points[index].y} x2={point.x} y2={point.y} stroke={activeSegment.has(index) ? '#ef4444' : '#0e7490'} strokeWidth={activeSegment.has(index) ? '1.1' : '0.85'} strokeLinecap="round" strokeDasharray={activeSegment.has(index) ? '2 1' : undefined} filter={activeSegment.has(index) ? undefined : 'url(#routeGlow)'} />)}
               {plan.waypoints.map((point, index) => <g key={`${point.x}-${point.y}-${index}`}><circle cx={point.x} cy={point.y} r="2" fill="#ffffff" stroke="#0e7490" strokeWidth="0.7" /><text x={point.x} y={point.y + 0.7} textAnchor="middle" fontSize="1.8" fontWeight="700" fill="#0e7490">{index + 1}</text></g>)}

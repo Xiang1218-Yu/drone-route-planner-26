@@ -19,10 +19,15 @@
 .
 ├── backend/
 │   ├── src/
+│   │   ├── app.ts
 │   │   ├── geometry.ts
 │   │   ├── server.ts
 │   │   ├── store.ts
-│   │   └── types.ts
+│   │   ├── types.ts
+│   │   └── zones.ts
+│   ├── tests/
+│   │   ├── api.test.ts
+│   │   └── store.test.ts
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
@@ -32,7 +37,10 @@
 │   │   ├── geometry.ts
 │   │   ├── main.tsx
 │   │   ├── styles.css
-│   │   └── types.ts
+│   │   ├── types.ts
+│   │   └── zones.ts
+│   ├── tests/
+│   │   └── zones.test.ts
 │   ├── index.html
 │   ├── package.json
 │   ├── tsconfig.json
@@ -54,6 +62,12 @@ npm run dev
 - 前端：<http://localhost:5173>
 - 后端：<http://localhost:4000>
 - 健康检查：<http://localhost:4000/api/health>
+
+运行测试（Node 内置 test runner，覆盖重复禁飞区 id 的拒绝/改写、跨方案隔离与正常增删改查）：
+
+```bash
+npm test
+```
 
 生产构建：
 
@@ -101,6 +115,13 @@ npm start
 ```
 
 响应中会附带 `validation`，包含 `valid`、`distance` 和 `issues`。
+
+禁飞区标识约束（按方案隔离）：
+
+- 同一方案内 `noFlyZones` 的 `id` 必须唯一。重复 id 会被**明确拒绝**：返回 `409` 及原因说明，方案不会写入存储，更新场景下原方案保持不变。
+- 缺失或空白的 `id` 会被**安全改写**为服务端生成的唯一 id，几何与名称保持不变。
+- 不同方案之间允许使用相同的禁飞区 id，互不影响。
+- 禁飞区数据不合法（`kind` 非 `rectangle`/`polygon`、坐标点少于 3 个等）返回 `400`。
 
 ### `DELETE /api/plans/:id`
 
