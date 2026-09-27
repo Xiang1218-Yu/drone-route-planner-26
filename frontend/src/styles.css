@@ -63,3 +63,10 @@ button { cursor: pointer; }
 .outline-action { width: 100%; display: flex; justify-content: space-between; border: 1px solid #d9e7e4; border-radius: 7px; margin-top: 8px; padding: 9px 10px; color: #5a7974; background: rgba(255,255,255,.55); font-size: 11px; text-align: left; }.outline-action:hover { color: #0f766e; border-color: #a3cbc3; background: #f5fcfa; }.outline-action span { color: #a0afad; font-size: 10px; }
 .api-note { display: flex; align-items: center; gap: 9px; padding: 12px; border: 1px dashed #c7dbd7; border-radius: 8px; color: #6b8883; background: rgba(255,255,255,.4); }.api-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 6px; color: #0f766e; background: #dcefea; font-size: 18px; }.api-note b { display: block; font-size: 11px; }.api-note small { display: block; margin-top: 2px; color: #99aaa7; font-size: 9px; }
 @media (max-width: 1250px) { body { min-width: 1024px; }.workspace { grid-template-columns: 235px minmax(500px, 1fr) 250px; }.canvas-panel { padding-left: 18px; padding-right: 18px; }.sidebar, .inspector { padding-left: 14px; padding-right: 14px; } }
+
+/* 风险定位：选中的禁飞区（按数组下标识别，避免重复 id 导致的误定位） */
+.zone-row.selected { border-radius: 7px; background: #fdf1e7; box-shadow: inset 3px 0 0 #f59e0b; }
+.route-canvas polygon[class] { cursor: pointer; }
+.route-canvas .zone-selected { stroke: #b45309 !important; stroke-width: 1.2 !important; fill-opacity: 0.32; }
+.issue-locator { width: 100%; border: 0; padding: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; border-radius: 4px; }
+.issue-locator:hover { color: #8a3b34; text-decoration: underline; }

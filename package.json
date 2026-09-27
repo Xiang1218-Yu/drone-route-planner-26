@@ -14,7 +14,8 @@
     "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "vite build --config frontend/vite.config.ts",
     "build:backend": "tsc -p backend/tsconfig.json",
-    "typecheck": "tsc -p frontend/tsconfig.json --noEmit && tsc -p backend/tsconfig.json --noEmit",
+    "typecheck": "tsc -p frontend/tsconfig.json --noEmit && tsc -p backend/tsconfig.json --noEmit && tsc -p frontend/tsconfig.test.json --noEmit && tsc -p backend/tsconfig.test.json --noEmit",
+    "test": "NODE_ENV=development tsx --test backend/src/server.test.ts frontend/src/identity.test.ts frontend/src/App.test.tsx",
     "start": "node backend/dist/server.js"
   },
   "dependencies": {

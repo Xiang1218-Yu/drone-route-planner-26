@@ -5,6 +5,7 @@ export type RouteIssue = {
   message: string;
   segmentIndex?: number;
   zoneId?: string;
+  zoneIndex?: number;
 };
 
 export type RouteValidation = {
@@ -85,13 +86,14 @@ export function validateRoute(plan: RoutePlan): RouteValidation {
 
   points.slice(1).forEach((point, index) => {
     const start = points[index];
-    plan.noFlyZones.forEach((zone) => {
+    plan.noFlyZones.forEach((zone, zoneIndex) => {
       if (segmentIntersectsZone(start, point, zone)) {
         issues.push({
           type: 'no-fly-zone',
           message: `航段 ${index + 1} 穿越禁飞区「${zone.name}」`,
           segmentIndex: index,
-          zoneId: zone.id
+          zoneId: zone.id,
+          zoneIndex
         });
       }
     });

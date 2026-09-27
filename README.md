@@ -62,6 +62,13 @@ npm run build
 npm start
 ```
 
+测试与类型检查：
+
+```bash
+npm test        # Node 内置测试运行器（后端接口 + 前端标识/渲染逻辑）
+npm run typecheck
+```
+
 ## REST API
 
 ### `GET /api/plans`
@@ -101,6 +108,16 @@ npm start
 ```
 
 响应中会附带 `validation`，包含 `valid`、`distance` 和 `issues`。
+风险项 `issues[]` 除了 `zoneId` 外还会返回 `zoneIndex`（禁飞区在方案内的下标），
+即使不同区域出现 id 异常也能稳定定位到具体对象。
+
+#### 禁飞区标识约束
+
+- 每个禁飞区必须有唯一的 `id`，**唯一性作用域为单个方案**；不同方案可以复用同一个 id。
+- `noFlyZones` 中出现重复 `id` 时返回 `400`，错误信息会指出冲突的 id，不会静默合并或覆盖。
+- 缺失或空白的 `id` 会被服务端安全补全为 UUID。
+- 前端在保存、加载、切换方案时同样会做一轮规范化（重复 id 改写为新 UUID 并提示），
+  画布与侧栏按下标删除区域，避免同 id 区域被连带删除。
 
 ### `DELETE /api/plans/:id`
 

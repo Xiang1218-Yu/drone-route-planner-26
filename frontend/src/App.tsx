@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import React, { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { planApi } from './api';
 import { distanceBetween, routePoints, validateRoute } from './geometry';
+import { createZoneId, dedupeZoneIds, removeZoneAt } from './identity';
 import type { NoFlyZone, Point, RoutePlan, ValidationResult } from './types';
 
 const CANVAS = { width: 100, height: 70 };
@@ -35,6 +36,18 @@ function pointText(point: Point) {
   return `${point.x.toFixed(1)}, ${point.y.toFixed(1)}`;
 }
 
+type NormalizedPlan = { plan: RoutePlan; rewrites: number };
+
+/**
+ * 规范化方案中的禁飞区标识：补全/改写重复 id。
+ * 同一方案内的重复 id 会被安全改写；不同方案即使使用相同的 zone id
+ * 也是相互独立的实体，这里逐方案独立处理、不做跨方案合并。
+ */
+function normalizePlan(input: RoutePlan): NormalizedPlan {
+  const { zones, rewrites } = dedupeZoneIds(input.noFlyZones ?? []);
+  return { plan: { ...input, noFlyZones: zones }, rewrites };
+}
+
 export default function App() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [plan, setPlan] = useState<RoutePlan>(initialPlan);
@@ -45,9 +58,14 @@ export default function App() {
   const [activePlanId, setActivePlanId] = useState<string>();
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [notice, setNotice] = useState('点击画布或使用左侧工具编辑航线');
+  // 当前在风险列表中定位到的禁飞区下标，按数组位置而非可能重复的 id 跟踪
+  const [selectedZoneIndex, setSelectedZoneIndex] = useState<number>();
 
   useEffect(() => {
-    planApi.list().then(({ plans }) => setSavedPlans(plans)).catch(() => setNotice('API 尚未启动，仍可在本地编辑方案'));
+    // 已保存方案列表只做展示：逐方案规范化，保证不同方案之间共享 id 也互不干扰
+    planApi.list()
+      .then(({ plans }) => setSavedPlans(plans.map((item) => normalizePlan(item).plan)))
+      .catch(() => setNotice('API 尚未启动，仍可在本地编辑方案'));
   }, []);
 
   useEffect(() => setValidation(validateRoute(plan)), [plan]);
@@ -81,7 +99,7 @@ export default function App() {
     }
     const index = plan.noFlyZones.length;
     const zone: NoFlyZone = {
-      id: `zone-${Date.now()}`,
+      id: createZoneId(plan.noFlyZones),
       name: `禁飞区 ${index + 1}`,
       kind: 'polygon',
       points: draftPolygon,
@@ -102,7 +120,7 @@ export default function App() {
     const y = Math.max(1, Math.min(CANVAS.height - height - 1, point.y - height / 2));
     const index = plan.noFlyZones.length;
     const zone: NoFlyZone = {
-      id: `zone-${Date.now()}`,
+      id: createZoneId(plan.noFlyZones),
       name: `矩形禁飞区 ${index + 1}`,
       kind: 'rectangle',
       points: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }],
@@ -118,36 +136,52 @@ export default function App() {
   };
 
   const removeWaypoint = (index: number) => updatePlan({ waypoints: plan.waypoints.filter((_, waypointIndex) => waypointIndex !== index) });
-  const removeZone = (id: string) => updatePlan({ noFlyZones: plan.noFlyZones.filter((zone) => zone.id !== id) });
+  // 按下标删除：即便历史数据里存在重复 id，也只会移除被点击的那一个区域
+  const removeZone = (index: number) => updatePlan({ noFlyZones: removeZoneAt(plan.noFlyZones, index) });
 
   const save = async () => {
     setSaveState('saving');
     try {
-      const { plan: saved } = await planApi.save({ ...plan, id: activePlanId });
-      setActivePlanId(saved.id);
-      setPlan(saved);
-      setSavedPlans((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      // 保存前在客户端先把缺失/重复的禁飞区 id 安全改写，后端仍会再次强校验
+      const { plan: normalized, rewrites } = normalizePlan(plan);
+      if (rewrites > 0) setNotice(`已为 ${rewrites} 个标识缺失或重复的禁飞区重新分配 id`);
+      const { plan: saved } = await planApi.save({ ...normalized, id: activePlanId });
+      const { plan: canonical } = normalizePlan(saved);
+      setActivePlanId(canonical.id);
+      setPlan(canonical);
+      setSavedPlans((current) => [canonical, ...current.filter((item) => item.id !== canonical.id)]);
       setSaveState('saved');
       setNotice('方案已保存到内存 API');
       window.setTimeout(() => setSaveState('idle'), 1800);
-    } catch {
+    } catch (error) {
       setSaveState('error');
-      setNotice('保存失败：请确认后端运行在 http://localhost:4000');
+      setNotice(error instanceof Error ? `保存失败：${error.message}` : '保存失败：请确认后端运行在 http://localhost:4000');
     }
   };
 
   const loadPlan = (saved: RoutePlan) => {
-    setPlan(saved);
-    setActivePlanId(saved.id);
+    // 加载历史方案时处理可能残留的重复 id（例如旧版本接口写入的数据）
+    const { plan: loaded, rewrites } = normalizePlan(saved);
+    setPlan(loaded);
+    setActivePlanId(loaded.id);
     setDraftPolygon([]);
-    setNotice(`已加载「${saved.name}」`);
+    setSelectedZoneIndex(undefined);
+    setNotice(rewrites > 0 ? `已加载「${loaded.name}」，并修正 ${rewrites} 个重复的禁飞区标识` : `已加载「${loaded.name}」`);
   };
 
   const newPlan = () => {
     setPlan({ ...initialPlan, name: '未命名航线', id: undefined, waypoints: [], noFlyZones: [] });
     setActivePlanId(undefined);
     setDraftPolygon([]);
+    setSelectedZoneIndex(undefined);
     setNotice('已新建空白方案');
+  };
+
+  const locateIssue = (zoneIndex: number | undefined) => {
+    if (zoneIndex === undefined || !plan.noFlyZones[zoneIndex]) return;
+    setSelectedZoneIndex(zoneIndex);
+    const zone = plan.noFlyZones[zoneIndex];
+    setNotice(`已定位到禁飞区「${zone.name}」（第 ${zoneIndex + 1} 个区域）`);
   };
 
   const toolItems: Array<{ id: Tool; label: string; icon: string; hint: string }> = [
@@ -200,7 +234,7 @@ export default function App() {
           <section className="side-section">
             <div className="section-title"><span>禁飞区</span><strong>{plan.noFlyZones.length}</strong></div>
             {plan.noFlyZones.length === 0 && <div className="empty-row">暂无禁飞区</div>}
-            {plan.noFlyZones.map((zone) => <div className="zone-row" key={zone.id}><span className="zone-swatch" style={{ background: zone.color }} /><div><b>{zone.name}</b><small>{zone.kind === 'rectangle' ? '矩形区域' : `${zone.points.length} 边形区域`}</small></div><button className="remove-button" onClick={() => removeZone(zone.id)}>×</button></div>)}
+            {plan.noFlyZones.map((zone, index) => <div className={`zone-row ${selectedZoneIndex === index ? 'selected' : ''}`} key={zone.id}><span className="zone-swatch" style={{ background: zone.color }} /><div><b>{zone.name}</b><small>{zone.kind === 'rectangle' ? '矩形区域' : `${zone.points.length} 边形区域`}</small></div><button className="remove-button" onClick={() => removeZone(index)} title={`删除「${zone.name}」`}>×</button></div>)}
           </section>
 
           <section className="side-section saved-section">
@@ -221,7 +255,7 @@ export default function App() {
               </defs>
               <rect width={CANVAS.width} height={CANVAS.height} fill="#f7fbfa" />
               <rect width={CANVAS.width} height={CANVAS.height} fill="url(#majorGrid)" />
-              {plan.noFlyZones.map((zone) => <polygon key={zone.id} points={zone.points.map((point) => `${point.x},${point.y}`).join(' ')} fill={zone.color} fillOpacity="0.19" stroke={zone.color} strokeWidth="0.7" strokeDasharray="1.5 1" />)}
+              {plan.noFlyZones.map((zone, index) => <polygon key={zone.id} className={selectedZoneIndex === index ? 'zone-selected' : undefined} points={zone.points.map((point) => `${point.x},${point.y}`).join(' ')} fill={zone.color} fillOpacity="0.19" stroke={zone.color} strokeWidth="0.7" strokeDasharray="1.5 1" onClick={(event) => { event.stopPropagation(); setSelectedZoneIndex(index); }} />)}
               {draftPolygon.length > 0 && <><polyline points={draftPolygon.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke="#0f766e" strokeWidth="0.65" strokeDasharray="1.5 1" />{draftPolygon.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="1.15" fill="#0f766e" />)}</>}
               {points.slice(1).map((point, index) => <line key={index} x1={points[index].x} y1={points[index].y} x2={point.x} y2={point.y} stroke={activeSegment.has(index) ? '#ef4444' : '#0e7490'} strokeWidth={activeSegment.has(index) ? '1.1' : '0.85'} strokeLinecap="round" strokeDasharray={activeSegment.has(index) ? '2 1' : undefined} filter={activeSegment.has(index) ? undefined : 'url(#routeGlow)'} />)}
               {plan.waypoints.map((point, index) => <g key={`${point.x}-${point.y}-${index}`}><circle cx={point.x} cy={point.y} r="2" fill="#ffffff" stroke="#0e7490" strokeWidth="0.7" /><text x={point.x} y={point.y + 0.7} textAnchor="middle" fontSize="1.8" fontWeight="700" fill="#0e7490">{index + 1}</text></g>)}
@@ -238,9 +272,9 @@ export default function App() {
 
         <aside className="inspector">
           <section className="metric-card primary-metric"><div className="metric-label">航线总距离</div><div className="metric-value">{formatDistance(validation.distance)}</div><div className="metric-caption">{points.length - 1} 个航段 · 预计 18 分钟</div><div className="metric-spark"><span style={{ height: '35%' }} /><span style={{ height: '55%' }} /><span style={{ height: '42%' }} /><span style={{ height: '75%' }} /><span style={{ height: '65%' }} /><span style={{ height: '92%' }} /><span style={{ height: '78%' }} /><span style={{ height: '100%' }} /></div></section>
-          <section className={`validation-card ${validation.valid ? 'is-valid' : 'has-error'}`}><div className="validation-heading"><span className="validation-icon">{validation.valid ? '✓' : '!'}</span><div><b>{validation.valid ? '校验通过' : '需要调整'}</b><small>{validation.valid ? '未发现越界或穿越禁飞区' : '请查看下方风险项'}</small></div></div>{validation.issues.length > 0 && <div className="issue-list">{validation.issues.slice(0, 4).map((issue, index) => <div className="issue-item" key={`${issue.message}-${index}`}><span>×</span>{issue.message}</div>)}</div>}</section>
+          <section className={`validation-card ${validation.valid ? 'is-valid' : 'has-error'}`}><div className="validation-heading"><span className="validation-icon">{validation.valid ? '✓' : '!'}</span><div><b>{validation.valid ? '校验通过' : '需要调整'}</b><small>{validation.valid ? '未发现越界或穿越禁飞区' : '点击风险项可在画布中定位对应区域'}</small></div></div>{validation.issues.length > 0 && <div className="issue-list">{validation.issues.slice(0, 4).map((issue, index) => typeof issue.zoneIndex === 'number' ? <button type="button" className="issue-item issue-locator" key={`${issue.zoneIndex}-${issue.segmentIndex}-${index}`} onClick={() => locateIssue(issue.zoneIndex)}><span>×</span>{issue.message}</button> : <div className="issue-item" key={`${issue.message}-${index}`}><span>×</span>{issue.message}</div>)}</div>}</section>
           <section className="inspector-section"><div className="section-title"><span>航线摘要</span><small>实时计算</small></div><div className="summary-list"><div><span>起点</span><b>{pointText(plan.start)}</b></div><div><span>终点</span><b>{pointText(plan.end)}</b></div><div><span>航点</span><b>{plan.waypoints.length} 个</b></div><div><span>禁飞区</span><b>{plan.noFlyZones.length} 个</b></div></div></section>
-          <section className="inspector-section"><div className="section-title"><span>快捷操作</span></div><button className="outline-action" onClick={() => { updatePlan({ waypoints: [] }); setNotice('已清空所有航点'); }}>清空航点</button><button className="outline-action" onClick={() => { updatePlan({ noFlyZones: [] }); setNotice('已移除所有禁飞区'); }}>移除禁飞区</button><button className="outline-action" onClick={() => setValidation(validateRoute(plan))}>重新校验路径 <span>⌘↵</span></button></section>
+          <section className="inspector-section"><div className="section-title"><span>快捷操作</span></div><button className="outline-action" onClick={() => { updatePlan({ waypoints: [] }); setNotice('已清空所有航点'); }}>清空航点</button><button className="outline-action" onClick={() => { updatePlan({ noFlyZones: [] }); setSelectedZoneIndex(undefined); setNotice('已移除所有禁飞区'); }}>移除禁飞区</button><button className="outline-action" onClick={() => setValidation(validateRoute(plan))}>重新校验路径 <span>⌘↵</span></button></section>
           <section className="api-note"><div className="api-icon">⌁</div><div><b>内存 REST API</b><small>保存到当前 Node.js 进程，重启后清空</small></div></section>
         </aside>
       </main>

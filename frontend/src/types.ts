@@ -25,6 +25,7 @@ export type ValidationIssue = {
   message: string;
   segmentIndex?: number;
   zoneId?: string;
+  zoneIndex?: number;
 };
 
 export type ValidationResult = {

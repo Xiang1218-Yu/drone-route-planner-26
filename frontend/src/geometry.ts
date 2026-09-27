@@ -46,9 +46,9 @@ export function validateRoute(plan: RoutePlan): ValidationResult {
     }
   });
   points.slice(1).forEach((point, segmentIndex) => {
-    plan.noFlyZones.forEach((zone) => {
+    plan.noFlyZones.forEach((zone, zoneIndex) => {
       if (segmentIntersectsZone(points[segmentIndex], point, zone)) {
-        issues.push({ type: 'no-fly-zone', message: `航段 ${segmentIndex + 1} 穿越禁飞区「${zone.name}」`, segmentIndex, zoneId: zone.id });
+        issues.push({ type: 'no-fly-zone', message: `航段 ${segmentIndex + 1} 穿越禁飞区「${zone.name}」`, segmentIndex, zoneId: zone.id, zoneIndex });
       }
     });
   });
